@@ -1,0 +1,8 @@
+build/
+.gradle/
+.cxx/
+local.properties
+*.iml
+.DS_Store
+*.onnx
+*.bin

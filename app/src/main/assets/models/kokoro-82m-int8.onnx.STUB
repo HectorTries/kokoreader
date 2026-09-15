@@ -1,0 +1,6 @@
+KOKOREADER_MODEL_STUB
+This file reserves the path app/src/main/assets/models/kokoro-82m-int8.onnx.
+Replace it with the real Kokoro-82M INT8 ONNX export (~80-300MB depending on
+quantization) before release builds. The app detects this stub at runtime and
+runs OCR-only (TTS no-op) so debug builds work without the model.
+See README "Adding the Kokoro model".

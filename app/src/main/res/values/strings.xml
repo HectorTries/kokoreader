@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KokoReader</string>
+    <string name="start_service">Start reading</string>
+    <string name="stop_service">Stop</string>
+    <string name="capture_page">🔊 Read page</string>
+    <string name="next_page">⏭ Next page</string>
+    <string name="status_idle">Idle. Tap Start, grant screen-capture consent, then open any app with English text and tap 🔊.</string>
+    <string name="overlay_prompt">Grant "Display over other apps" so the floating button can appear.</string>
+    <string name="use_as_tts_engine">Use Koko voice in any app (TTS engine)</string>
+    <string name="tts_hint">Recommended: tap the button above, pick KokoReader as preferred TTS engine — then Kindle Read Aloud and any app speak with the Koko voice, no overlay needed.</string>
+</resources>
