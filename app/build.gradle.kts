@@ -12,8 +12,8 @@ android {
         applicationId = "com.kokoreader"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.8-debug"
+        versionCode = 10
+        versionName = "1.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -55,6 +55,15 @@ android {
             useLegacyPackaging = false
         }
     }
+
+    testOptions {
+        unitTests.all {
+            it.systemProperty(
+                "kokoreader.srcMain",
+                File(projectDir, "src/main/java").absolutePath
+            )
+        }
+    }
 }
 
 dependencies {
@@ -67,4 +76,6 @@ dependencies {
     // 1.25.1 ships 16KB-aligned arm64 native libs (1.20.0 does not)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.25.1")
     implementation("androidx.lifecycle:lifecycle-service:2.8.5")
+
+    testImplementation("junit:junit:4.13.2")
 }

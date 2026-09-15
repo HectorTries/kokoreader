@@ -322,57 +322,9 @@ object KokoroEngine {
     const val MAX_TOKENS_PER_CHUNK = 400
 
     /** Split text into clause-aware chunks in [MIN,MAX] char range.
-     *  Short trailing text merges with the previous chunk. */
-    fun splitSentences(text: String): List<String> {
-        val out = ArrayList<String>()
-        // Split on clause punctuation (.!?; + newline), keep delimiter.
-        val clauses = text.split(Regex("(?<=[.!?;\n])\\s+"))
-        val cur = StringBuilder()
-        fun flush() {
-            if (cur.isNotEmpty()) { out.add(cur.toString()); cur.clear() }
-        }
-        for (c in clauses) {
-            if (c.isEmpty()) continue
-            if (cur.isEmpty()) {
-                var rest = c
-                // Single clause longer than MAX: hard-split on word boundary.
-                while (rest.length > MAX_CHUNK_CHARS) {
-                    var cut = rest.lastIndexOf(' ', MAX_CHUNK_CHARS)
-                    if (cut < 20) cut = MAX_CHUNK_CHARS
-                    out.add(rest.substring(0, cut))
-                    rest = rest.substring(cut).trimStart()
-                }
-                cur.append(rest)
-            } else if (cur.length + 1 + c.length <= MAX_CHUNK_CHARS) {
-                cur.append(' ').append(c)
-            } else {
-                if (cur.length < MIN_CHUNK_CHARS && out.isNotEmpty()) {
-                    // Merge short leading buffer forward instead of emitting a stub.
-                    cur.append(' ').append(c)
-                    if (cur.length > MAX_CHUNK_CHARS) {
-                        // Overflow after merge: emit up to MAX on word boundary.
-                        var cut = cur.lastIndexOf(' ', MAX_CHUNK_CHARS)
-                        if (cut < 20) cut = MAX_CHUNK_CHARS
-                        out.add(cur.substring(0, cut))
-                        cur.delete(0, cut)
-                        while (cur.isNotEmpty() && cur[0] == ' ') cur.deleteCharAt(0)
-                    }
-                } else {
-                    flush()
-                    var rest = c
-                    while (rest.length > MAX_CHUNK_CHARS) {
-                        var cut = rest.lastIndexOf(' ', MAX_CHUNK_CHARS)
-                        if (cut < 20) cut = MAX_CHUNK_CHARS
-                        out.add(rest.substring(0, cut))
-                        rest = rest.substring(cut).trimStart()
-                    }
-                    cur.append(rest)
-                }
-            }
-        }
-        flush()
-        return out
-    }
+     *  Short trailing text merges with the previous chunk.
+     *  Delegates to TtsLogic (pure JVM, unit-tested) — single source of truth. */
+    fun splitSentences(text: String): List<String> = TtsLogic.splitSentences(text)
 
     fun synthesizeChunked(text: String, shouldStop: () -> Boolean, yield: (FloatArray) -> Boolean): Boolean {
         val s = session
@@ -598,16 +550,6 @@ object KokoroEngine {
         }
     }
 
-    /** Float [-1,1] -> 16-bit LE PCM bytes (for TextToSpeechService callbacks). */
-    fun floatToPcm16(pcm: FloatArray): ByteArray {
-        val out = ByteArray(pcm.size * 2)
-        for (i in pcm.indices) {
-            var s = (pcm[i] * 32767f).toInt()
-            if (s > 32767) s = 32767
-            if (s < -32768) s = -32768
-            out[i * 2] = (s and 0xFF).toByte()
-            out[i * 2 + 1] = ((s shr 8) and 0xFF).toByte()
-        }
-        return out
-    }
+    /** Float [-1,1] -> 16-bit LE PCM bytes (delegates to unit-tested TtsLogic). */
+    fun floatToPcm16(pcm: FloatArray): ByteArray = TtsLogic.floatToPcm16(pcm)
 }

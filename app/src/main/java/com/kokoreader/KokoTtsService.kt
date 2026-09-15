@@ -126,9 +126,11 @@ class KokoTtsService : TextToSpeechService() {
     private fun doSynthesize(text0: String, hostRatePct: Int, callback: SynthesisCallback) {
         val text = text0
         if (text.isBlank()) {
+            var started = false
             try {
                 callback.start(KokoroEngine.SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
-                callback.done()
+                started = true
+                if (started) callback.done()
             } catch (t: Throwable) {
                 Log.w(TAG, "empty-utterance callback failed", t)
             }

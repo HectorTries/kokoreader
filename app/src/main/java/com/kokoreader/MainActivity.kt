@@ -169,9 +169,73 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     tv.text = "Engine: $s" + if (phases.isNotEmpty()) "\nInit phases: $phases" else ""
                     try { findViewById<android.widget.TextView>(R.id.inferStats).text = inferLine } catch (_: Exception) {}
+                    try {
+                        val f = java.io.File(filesDir, "kokoro-82m-int8.onnx")
+                        val sizeMb = if (f.exists()) "%.1fMB".format(f.length() / 1048576.0) else "missing"
+                        val probe = try { EspeakBridge.textToPhonemeIds("hello").size } catch (_: Exception) { -1 }
+                        findViewById<android.widget.TextView>(R.id.diagText).text =
+                            "model: exists=${f.exists()} size=$sizeMb\nORT ready=${KokoroEngine.isReady()}\nG2P 'hello' phonemes=$probe\nlast synth=${KokoroEngine.lastInferMs}ms\nstatus=${KokoroEngine.status}"
+                    } catch (_: Exception) {}
                 }
             }.start()
         } catch (_: Exception) {}
+    }
+
+    /** v0.10: diagnostics card + Test voice button. Scope: MainActivity only. */
+    private fun wireDiagnostics() {
+        try {
+            findViewById<Button>(R.id.testVoiceButton)?.setOnClickListener { v ->
+                v.isEnabled = false
+                findViewById<TextView>(R.id.testVoiceResult).text = "Test: synthesising…"
+                Thread {
+                    var reason = ""
+                    var ok = false
+                    val t0 = android.os.SystemClock.elapsedRealtime()
+                    try {
+                        KokoroEngine.ensureInit(applicationContext)
+                        if (!KokoroEngine.isReady()) { reason = "engine not ready: ${KokoroEngine.status}" }
+                        else {
+                            val chunks = ArrayList<FloatArray>()
+                            ok = KokoroEngine.synthesizeChunked("Hello from KokoReader", { false }, { pcm ->
+                                chunks.add(pcm); true
+                            })
+                            if (!ok) { reason = "synth returned false: ${KokoroEngine.status}" }
+                            else {
+                                val total = chunks.sumOf { it.size }
+                                if (total == 0) { ok = false; reason = "empty PCM" }
+                                else {
+                                    val shorts = ShortArray(total)
+                                    var o = 0
+                                    for (c in chunks) for (f in c) shorts[o++] = (f.coerceIn(-1f, 1f) * 32767).toInt().toShort()
+                                    val track = android.media.AudioTrack.Builder()
+                                        .setAudioAttributes(android.media.AudioAttributes.Builder()
+                                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                                        .setAudioFormat(android.media.AudioFormat.Builder()
+                                            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                                            .setSampleRate(KokoroEngine.SAMPLE_RATE).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build())
+                                        .setBufferSizeInBytes(shorts.size * 2)
+                                        .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                                        .build()
+                                    try {
+                                        track.write(shorts, 0, shorts.size)
+                                        track.play()
+                                        val ms = android.os.SystemClock.elapsedRealtime() - t0
+                                        reason = "played ${shorts.size} samples in ${ms}ms"
+                                    } finally { track.release() }
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) { ok = false; reason = t.message ?: t.javaClass.simpleName }
+                    val line = if (ok) "Test: SUCCESS — $reason" else "Test: FAIL — $reason"
+                    runOnUiThread {
+                        findViewById<TextView>(R.id.testVoiceResult).text = line
+                        v.isEnabled = true
+                        refreshEngineStatus()
+                    }
+                }.start()
+            }
+        } catch (t: Throwable) { Log.w(TAG, "diagnostics wiring failed", t) }
     }
 
     /** Ordered consent chain: notifications → overlay → capture. Never strands the user. */
