@@ -151,6 +151,7 @@ object KokoroEngine {
                 val probe = EspeakBridge.textToPhonemeIds("hello")
                 if (probe.isEmpty()) {
                     status = "G2P probe failed (espeak-data missing/broken); voice disabled"
+                    try { persistReady(appContext, false) } catch (_: Exception) {}
                     Log.e(TAG, status)
                     try { session?.close() } catch (_: Exception) {}
                     session = null
@@ -158,6 +159,7 @@ object KokoroEngine {
                 }
             } catch (t: Throwable) {
                 status = "G2P probe crashed: ${t.message}; voice disabled"
+                try { persistReady(appContext, false) } catch (_: Exception) {}
                 Log.e(TAG, status, t)
                 try { session?.close() } catch (_: Exception) {}
                 session = null
@@ -182,9 +184,11 @@ object KokoroEngine {
             }
             phaseTimings = sb.toString()
             status = "ready (model=${modelFile.length()}b, inputs=${session!!.inputNames}, ep=$activeEp, speed=${speechSpeed}x, voice=$currentVoiceAsset)"
+            persistReady(appContext, true)
             Log.i(TAG, "KokoroEngine $status | phases: $phaseTimings")
         } catch (t: Throwable) {
             status = "init failed: ${t.javaClass.simpleName}: ${t.message}"
+            try { persistReady(appContext, false) } catch (_: Exception) {}
             Log.e(TAG, status, t)
             try { session?.close() } catch (_: Exception) {}
             session = null
@@ -195,6 +199,24 @@ object KokoroEngine {
     }
 
     fun isReady(): Boolean = initDone && session != null && voice != null && voiceRows > 0
+
+    /** v1.1 FIX-3b: persistent ready flag — survives process restarts so the
+     *  second Play (and every later one) skips straight to synthesis when a
+     *  previous run completed staging successfully. Cleared on any init failure. */
+    fun wasReadyBefore(appContext: Context): Boolean {
+        return try {
+            val prefs = appContext.getSharedPreferences("kokoreader", Context.MODE_PRIVATE)
+            prefs.getBoolean("engine_ready_v1", false) &&
+                File(appContext.filesDir, MODEL_FILE).let { it.exists() && it.length() > 1024 } &&
+                File(File(appContext.filesDir, "espeak-data"), ".ready").exists()
+        } catch (_: Exception) { false }
+    }
+    private fun persistReady(appContext: Context, ready: Boolean) {
+        try {
+            appContext.getSharedPreferences("kokoreader", Context.MODE_PRIVATE)
+                .edit().putBoolean("engine_ready_v1", ready).apply()
+        } catch (_: Exception) {}
+    }
 
     /** Persisted voice/speed setters (called from app settings). */
     fun setVoiceAsset(appContext: Context, asset: String): Boolean {

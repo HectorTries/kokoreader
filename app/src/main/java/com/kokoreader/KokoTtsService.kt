@@ -2,11 +2,13 @@ package com.kokoreader
 
 import android.content.Intent
 import android.media.AudioFormat
+import android.os.Build
 import android.os.Bundle
 import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
+import android.speech.tts.Voice
 import android.util.Log
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -98,6 +100,76 @@ class KokoTtsService : TextToSpeechService() {
         }
     }
 
+    // v1.1 FIX-1 (silent-engine killer): expose a US English voice.
+    // Without non-empty getVoices + isValidVoice + loadVoice, the Android
+    // TTS framework (and Kindle) treat the engine as voiceless and send
+    // nothing to onSynthesizeText. Voice features require API 21+; the
+    // whole block degrades gracefully on older runtimes (minSdk 29 anyway).
+    private fun kokoVoice(): Voice? {
+        return try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
+            val locale = try { Locale("eng", "USA") } catch (_: Exception) { Locale.US }
+            Voice(
+                "en-US-kokoro-af-sky",
+                locale,
+                Voice.QUALITY_HIGH,
+                Voice.LATENCY_NORMAL,
+                false,
+                setOf("female", "en-US", "kokoro", "af_sky")
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "voice construction failed", t)
+            null
+        }
+    }
+
+    override fun onGetVoices(): List<Voice> {
+        return try {
+            val v = kokoVoice()
+            if (v != null) listOf(v) else emptyList()
+        } catch (t: Throwable) {
+            Log.w(TAG, "onGetVoices failed", t)
+            emptyList()
+        }
+    }
+
+    // NOTE: actual framework signatures are onIsValidVoiceName(String) and
+    // onLoadVoice(String). (Earlier draft used Voice-typed overloads that
+    // don't exist — fixed in v1.1.)
+    override fun onIsValidVoiceName(voiceName: String?): Int {
+        return try {
+            if (voiceName.isNullOrEmpty()) return TextToSpeech.LANG_NOT_SUPPORTED
+            val n = voiceName.lowercase()
+            if (n.contains("en") || n.contains("koko") || n.contains("sky") || n.contains("nicole"))
+                TextToSpeech.LANG_COUNTRY_AVAILABLE
+            else TextToSpeech.LANG_NOT_SUPPORTED
+        } catch (t: Throwable) {
+            Log.w(TAG, "onIsValidVoiceName failed", t)
+            TextToSpeech.LANG_NOT_SUPPORTED
+        }
+    }
+
+    override fun onLoadVoice(voiceName: String?): Int {
+        return try {
+            if (voiceName.isNullOrEmpty()) return TextToSpeech.LANG_NOT_SUPPORTED
+            Log.i(TAG, "voice loaded: $voiceName")
+            TextToSpeech.LANG_COUNTRY_AVAILABLE
+        } catch (t: Throwable) {
+            Log.w(TAG, "onLoadVoice failed", t)
+            TextToSpeech.LANG_NOT_SUPPORTED
+        }
+    }
+
+    override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String {
+        return try {
+            val l = (lang ?: "").lowercase()
+            if (l == "eng" || l == "en" || l.isEmpty()) "en-US-kokoro-af-sky" else ""
+        } catch (t: Throwable) {
+            Log.w(TAG, "onGetDefaultVoiceNameFor failed", t)
+            ""
+        }
+    }
+
     override fun onStop() {
         stopped.set(true)
     }
@@ -109,8 +181,12 @@ class KokoTtsService : TextToSpeechService() {
         // may only be valid on the binder thread during this call).
         val snapRate: Int = try { request.speechRate } catch (_: Exception) { 100 }
         val text0 = try { request.charSequenceText?.toString() ?: "" } catch (_: Exception) { "" }
+        // v1.1 FIX-2: accept ALL en variants, never reject. Log what the host asked for.
         val lang0 = try { request.language } catch (_: Exception) { "eng" }
         val country0 = try { request.country } catch (_: Exception) { "USA" }
+        val variant0 = try { request.variant } catch (_: Exception) { "" }
+        val voiceName0 = try { request.voiceName } catch (_: Exception) { "" }
+        Log.i(TAG, "synth req lang=$lang0 country=$country0 variant=$variant0 voice=$voiceName0 rate=$snapRate chars=${text0.length}")
         synthExecutor.execute {
             try {
                 doSynthesize(text0, snapRate, callback)
@@ -138,6 +214,17 @@ class KokoTtsService : TextToSpeechService() {
         }
         val clipped = if (text.length > MAX_SPEECH_INPUT) text.take(MAX_SPEECH_INPUT) else text
 
+        // v1.1 FIX-3 (first-run timeout): start the audio stream IMMEDIATELY
+        // on the worker, BEFORE the 134MB stage + ORT session build, so the
+        // host never times out waiting for the first byte. Gapless: the
+        // first yielded chunk follows the same stream.
+        var started = false
+        try {
+            callback.start(KokoroEngine.SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
+            started = true
+        } catch (t: Throwable) {
+            Log.w(TAG, "early callback.start failed", t)
+        }
         // Ensure model is staged/loaded (worker thread — safe for file IO + ORT).
         try {
             KokoroEngine.ensureInit(applicationContext)
@@ -162,7 +249,6 @@ class KokoTtsService : TextToSpeechService() {
             Log.w(TAG, "speech-rate mapping failed", t)
         }
 
-        var started = false
         val ok = KokoroEngine.synthesizeChunked(
             clipped,
             shouldStop = { stopped.get() },

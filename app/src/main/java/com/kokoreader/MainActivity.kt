@@ -173,8 +173,10 @@ class MainActivity : AppCompatActivity() {
                         val f = java.io.File(filesDir, "kokoro-82m-int8.onnx")
                         val sizeMb = if (f.exists()) "%.1fMB".format(f.length() / 1048576.0) else "missing"
                         val probe = try { EspeakBridge.textToPhonemeIds("hello").size } catch (_: Exception) { -1 }
+                        val espeakReady = java.io.File(java.io.File(filesDir, "espeak-data"), ".ready").exists()
+                        val persisted = KokoroEngine.wasReadyBefore(applicationContext)
                         findViewById<android.widget.TextView>(R.id.diagText).text =
-                            "model: exists=${f.exists()} size=$sizeMb\nORT ready=${KokoroEngine.isReady()}\nG2P 'hello' phonemes=$probe\nlast synth=${KokoroEngine.lastInferMs}ms\nstatus=${KokoroEngine.status}"
+                            "model: exists=${f.exists()} size=$sizeMb\nORT ready=${KokoroEngine.isReady()} (persisted=$persisted)\nG2P 'hello' phonemes=$probe (espeak-data ready=$espeakReady)\nsampleRate=${KokoroEngine.SAMPLE_RATE}Hz mono PCM16\nlast synth=${KokoroEngine.lastInferMs}ms\nstatus=${KokoroEngine.status}"
                     } catch (_: Exception) {}
                 }
             }.start()
@@ -207,6 +209,10 @@ class MainActivity : AppCompatActivity() {
                                     val shorts = ShortArray(total)
                                     var o = 0
                                     for (c in chunks) for (f in c) shorts[o++] = (f.coerceIn(-1f, 1f) * 32767).toInt().toShort()
+                                    // v1.1 FIX-5/6: STREAM mode at exactly 24000Hz mono PCM16
+                                    // (matches engine + TTS callback contract). Old STATIC mode
+                                    // released the track immediately after play() — cutting
+                                    // audio to silence. Now block until playback completes.
                                     val track = android.media.AudioTrack.Builder()
                                         .setAudioAttributes(android.media.AudioAttributes.Builder()
                                             .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
@@ -214,14 +220,27 @@ class MainActivity : AppCompatActivity() {
                                         .setAudioFormat(android.media.AudioFormat.Builder()
                                             .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
                                             .setSampleRate(KokoroEngine.SAMPLE_RATE).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build())
-                                        .setBufferSizeInBytes(shorts.size * 2)
-                                        .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                                        .setBufferSizeInBytes(maxOf(shorts.size * 2, android.media.AudioTrack.getMinBufferSize(KokoroEngine.SAMPLE_RATE, android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)))
+                                        .setTransferMode(android.media.AudioTrack.MODE_STREAM)
                                         .build()
                                     try {
-                                        track.write(shorts, 0, shorts.size)
                                         track.play()
+                                        var written = 0
+                                        while (written < shorts.size) {
+                                            val n = track.write(shorts, written, shorts.size - written)
+                                            if (n <= 0) break
+                                            written += n
+                                        }
+                                        // Wait for the tail to actually play out.
+                                        var waited = 0
+                                        val expectMs = (shorts.size * 1000L / KokoroEngine.SAMPLE_RATE).toInt() + 1500
+                                        while (track.playState == android.media.AudioTrack.PLAYSTATE_PLAYING && waited < expectMs) {
+                                            try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+                                            waited += 100
+                                        }
+                                        try { track.stop() } catch (_: Exception) {}
                                         val ms = android.os.SystemClock.elapsedRealtime() - t0
-                                        reason = "played ${shorts.size} samples in ${ms}ms"
+                                        reason = "played $written/${shorts.size} samples @${KokoroEngine.SAMPLE_RATE}Hz in ${ms}ms"
                                     } finally { track.release() }
                                 }
                             }

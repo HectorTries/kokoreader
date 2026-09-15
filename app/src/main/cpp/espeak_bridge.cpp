@@ -16,6 +16,10 @@
 
 static std::mutex g_mu;
 static bool g_init = false;
+// v1.1 FIX-4: remember the extracted espeak-data path from init() so the
+// lazy fallback in textToPhonemeIds uses the SAME path (assets can't be
+// mmap'd by path; extracted filesDir copy is the only valid location).
+static std::string g_data_path;
 
 // Kokoro vocab: IPA char (UTF-8) -> id. Matches kokoro-onnx config.json.
 static const std::unordered_map<std::string,int> VOCAB = {
@@ -36,6 +40,7 @@ Java_com_kokoreader_EspeakBridge_init(JNIEnv *env, jobject /*thiz*/, jstring dat
     if (rate <= 0) return JNI_FALSE;
     if (espeak_SetVoiceByName("en-us") != EE_OK) return JNI_FALSE;
     g_init = true;
+    g_data_path = path;
     return JNI_TRUE;
 }
 
@@ -53,7 +58,10 @@ Java_com_kokoreader_EspeakBridge_textToPhonemeIds(JNIEnv *env, jobject /*thiz*/,
     {
         std::lock_guard<std::mutex> lock(g_mu);
         if (!g_init) {
-            int rate = espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, nullptr, 0);
+            // v1.1 FIX-4: reuse extracted-data path, never bare nullptr
+            // (bare nullptr makes espeak look in /usr/share — absent on Android).
+            const char *fp = g_data_path.empty() ? nullptr : g_data_path.c_str();
+            int rate = espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, fp, 0);
             if (rate > 0 && espeak_SetVoiceByName("en-us") == EE_OK) g_init = true;
         }
         if (g_init) {
