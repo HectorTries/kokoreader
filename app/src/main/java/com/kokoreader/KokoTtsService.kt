@@ -78,10 +78,10 @@ class KokoTtsService : TextToSpeechService() {
 
     override fun onGetLanguage(): Array<String> {
         return try {
-            arrayOf("eng", "USA", "")
+            arrayOf("en", "US", "")
         } catch (t: Throwable) {
             Log.w(TAG, "onGetLanguage failed", t)
-            arrayOf("eng", "USA", "")
+            arrayOf("en", "US", "")
         }
     }
 
@@ -108,7 +108,7 @@ class KokoTtsService : TextToSpeechService() {
     private fun kokoVoice(): Voice? {
         return try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
-            val locale = try { Locale("eng", "USA") } catch (_: Exception) { Locale.US }
+            val locale = Locale.US
             Voice(
                 "en-US-kokoro-af-sky",
                 locale,
@@ -186,7 +186,7 @@ class KokoTtsService : TextToSpeechService() {
         val country0 = try { request.country } catch (_: Exception) { "USA" }
         val variant0 = try { request.variant } catch (_: Exception) { "" }
         val voiceName0 = try { request.voiceName } catch (_: Exception) { "" }
-        Log.i(TAG, "synth req lang=$lang0 country=$country0 variant=$variant0 voice=$voiceName0 rate=$snapRate chars=${text0.length}")
+        Log.i(TAG, "synth req lang=$lang0 country=$country0 variant=$variant0 voice=$voiceName0 rate=$snapRate chars=${text0.length} head=[${text0.take(60).replace('\n', ' ')}]")
         synthExecutor.execute {
             try {
                 doSynthesize(text0, snapRate, callback)
