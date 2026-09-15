@@ -36,13 +36,18 @@ class KokoTtsService : TextToSpeechService() {
     }
 
     private lateinit var synthExecutor: ExecutorService
+    /** v0.9 BUG-2: pre-warm/ensureInit runs here, never on synthExecutor —
+     *  the 134MB stage + ORT session build must not serialise behind
+     *  (or stall) the first utterance. */
+    private lateinit var initExecutor: ExecutorService
     private val stopped = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
         synthExecutor = Executors.newSingleThreadExecutor()
+        initExecutor = Executors.newSingleThreadExecutor()
         // Pre-warm the engine off the main thread (one-time ~134MB file staging).
-        synthExecutor.execute {
+        initExecutor.execute {
             try {
                 KokoroEngine.ensureInit(applicationContext)
                 Log.i(TAG, "engine pre-warm: ${KokoroEngine.status}")
@@ -171,8 +176,19 @@ class KokoTtsService : TextToSpeechService() {
                         if (stopped.get()) return@synthesizeChunked false
                         val n = minOf(8192, bytes.size - off)
                         val written = callback.audioAvailable(bytes, off, n)
-                        // audioAvailable returns bytes consumed; advance defensively.
-                        off += if (written > 0) written else n
+                        // v0.9 BUG-4: a 0-write is backpressure, not progress —
+                        // re-offer the same slice (bounded), then fail loudly.
+                        if (written > 0) { off += written; continue }
+                        var retries = 0
+                        var w2 = 0
+                        while (retries < 10 && w2 <= 0 && !stopped.get()) {
+                            try { Thread.sleep(5) } catch (_: InterruptedException) { break }
+                            w2 = try { callback.audioAvailable(bytes, off, n) } catch (_: Exception) { break }
+                            retries++
+                        }
+                        if (w2 > 0) { off += w2; continue }
+                        Log.e(TAG, "audioAvailable 0-write x$retries — reporting error")
+                        return@synthesizeChunked false
                     }
                     true
                 } catch (t: Throwable) {
@@ -182,7 +198,9 @@ class KokoTtsService : TextToSpeechService() {
             }
         )
         try {
-            if (ok && !stopped.get()) callback.done()
+            // v0.9: nothing started = failure, never done(). Silent
+            // empty-audio "success" leaves hosts (Kindle) stuck on mute.
+            if (ok && started && !stopped.get()) callback.done()
             else if (!stopped.get()) callback.error()
             // else: stopped mid-utterance — just return, framework handles it.
         } catch (t: Throwable) {
@@ -202,6 +220,7 @@ class KokoTtsService : TextToSpeechService() {
         try {
             stopped.set(true)
             synthExecutor.shutdownNow()
+            initExecutor.shutdownNow()
         } catch (_: Exception) {}
         super.onDestroy()
     }

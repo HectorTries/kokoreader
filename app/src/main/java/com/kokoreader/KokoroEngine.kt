@@ -144,6 +144,25 @@ object KokoroEngine {
             mark("session_start")
             session = createAcceleratedSession(modelPath)
             mark("session_done")
+            // v0.9: G2P probe — refuse "ready" with zero audio. If espeak
+            // init failed, every chunk G2Ps to empty ids and hosts hear
+            // silence reported as success. Surface it here instead.
+            try {
+                val probe = EspeakBridge.textToPhonemeIds("hello")
+                if (probe.isEmpty()) {
+                    status = "G2P probe failed (espeak-data missing/broken); voice disabled"
+                    Log.e(TAG, status)
+                    try { session?.close() } catch (_: Exception) {}
+                    session = null
+                    return
+                }
+            } catch (t: Throwable) {
+                status = "G2P probe crashed: ${t.message}; voice disabled"
+                Log.e(TAG, status, t)
+                try { session?.close() } catch (_: Exception) {}
+                session = null
+                return
+            }
             // Warmup: one short silent synthesis so the FIRST real utterance
             // doesn't pay graph-arena + kernel autotune cost (v0.5 complaint).
             try {
@@ -390,7 +409,9 @@ object KokoroEngine {
                     }
                 }
             }
-            if (idLists.isEmpty()) return true
+            // v0.9: all-empty G2P on non-blank text is a failure, not
+            // success — return false so fallbacks / error callbacks trigger.
+            if (idLists.isEmpty()) return text.isBlank()
             val inferPool = java.util.concurrent.Executors.newSingleThreadExecutor()
             try {
                 var ok = true
