@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity() {
         wireVoiceSettings()
         wireEpSettings()
         refreshEngineStatus()
+        wireDiagnostics()
         findViewById<Button>(R.id.stopButton).setOnClickListener {            val stop = Intent(this, ReaderService::class.java).apply {
                 action = ReaderService.ACTION_STOP
             }
