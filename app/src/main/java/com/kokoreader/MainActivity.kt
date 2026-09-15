@@ -169,6 +169,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     tv.text = "Engine: $s" + if (phases.isNotEmpty()) "\nInit phases: $phases" else ""
                     try { findViewById<android.widget.TextView>(R.id.inferStats).text = inferLine } catch (_: Exception) {}
+                    try { findViewById<android.widget.TextView>(R.id.synthLog)?.text = "last: ${KokoTtsService.lastSynth}" } catch (_: Exception) {}
                     try {
                         val f = java.io.File(filesDir, "kokoro-82m-int8.onnx")
                         val sizeMb = if (f.exists()) "%.1fMB".format(f.length() / 1048576.0) else "missing"
@@ -183,8 +184,19 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    /** v1.5: refresh button for the framework synth log (screenshot-able). */
+    private fun wireSynthLog() {
+        try {
+            findViewById<Button>(R.id.refreshSynthButton)?.setOnClickListener {
+                try { findViewById<TextView>(R.id.synthLog).text = "last: ${KokoTtsService.lastSynth}" }
+                catch (t: Throwable) { Log.w(TAG, "synth log refresh failed", t) }
+            }
+        } catch (t: Throwable) { Log.w(TAG, "synth log wiring failed", t) }
+    }
+
     /** v0.10: diagnostics card + Test voice button. Scope: MainActivity only. */
     private fun wireDiagnostics() {
+        wireSynthLog()
         try {
             findViewById<Button>(R.id.testVoiceButton)?.setOnClickListener { v ->
                 v.isEnabled = false

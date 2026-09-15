@@ -94,6 +94,17 @@ object TtsLogic {
         return textIsBlank
     }
 
+    /** Voice-name gate for the framework contract (v1.5 fix): accepts our
+     *  voice id, BCP-47 "en" variants, and the legacy Sky/Nicole aliases.
+     *  Pure JVM — unit-tested. */
+    fun isKokoVoice(voiceName: String?): Boolean {
+        if (voiceName.isNullOrEmpty()) return false
+        val n = voiceName.lowercase()
+        return n == "en-us-kokoro-af-sky" || n.contains("koko") ||
+            n.contains("sky") || n.contains("nicole") ||
+            n == "en-us" || n == "en_us" || n == "en" || n.startsWith("en-")
+    }
+
     /** Completion action for the TTS callback state machine. */
     enum class Completion { DONE, ERROR, NONE_STOPPED }
     fun completionAction(ok: Boolean, started: Boolean, stopped: Boolean): Completion {

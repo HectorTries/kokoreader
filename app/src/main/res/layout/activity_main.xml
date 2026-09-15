@@ -156,5 +156,25 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingTop="4dp" />
+
+    <TextView
+        android:text="Framework requests (v1.5 — screenshot this if Play/Kindle is silent)"
+        android:textStyle="bold"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="16dp" />
+
+    <TextView
+        android:id="@+id/synthLog"
+        android:text="no synth request yet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="4dp" />
+
+    <Button
+        android:id="@+id/refreshSynthButton"
+        android:text="Refresh framework log"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
 </LinearLayout>
 </ScrollView>

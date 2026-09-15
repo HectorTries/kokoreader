@@ -35,6 +35,16 @@ class KokoTtsService : TextToSpeechService() {
         /** v0.6: host rate baseline — the engine already runs at 1.25x, so a
          *  host rate of 1.0 maps to no extra change; rates multiply. */
         private const val BASE_SPEED = 1.25f
+        /** v1.5 on-screen diagnostics: last framework synth event, readable
+         *  from MainActivity without logcat (screenshot-able). */
+        @Volatile var lastSynth: String = "no synth request yet"
+            private set
+        @Volatile var synthCount: Int = 0
+            private set
+        fun recordSynth(line: String) {
+            synthCount++
+            lastSynth = "#$synthCount $line"
+        }
     }
 
     private lateinit var synthExecutor: ExecutorService
@@ -143,27 +153,33 @@ class KokoTtsService : TextToSpeechService() {
     // NOTE: actual framework signatures are onIsValidVoiceName(String) and
     // onLoadVoice(String). (Earlier draft used Voice-typed overloads that
     // don't exist — fixed in v1.1.)
+    // v1.5 ROOT-CAUSE FIX (Play/Kindle silence since v1.1): the framework
+    // contract requires SUCCESS/ERROR here, NOT LANG_* codes. AOSP binder:
+    //   int retVal = onIsValidVoiceName(voiceName);
+    //   if (retVal == TextToSpeech.SUCCESS) { enqueue LoadVoiceItem }
+    // LANG_COUNTRY_AVAILABLE (2) != SUCCESS (0), so voice loading ALWAYS
+    // failed -> setLanguage/setVoice failed -> hosts sent zero utterances.
+    // TEST VOICE bypasses the framework (direct AudioTrack), which is why
+    // it always worked. (The v1.3/v1.4 ISO-2/ISO-3 theory was a red herring:
+    // onGetLanguage is only called on API <= 17 per AOSP javadoc.)
     override fun onIsValidVoiceName(voiceName: String?): Int {
         return try {
-            if (voiceName.isNullOrEmpty()) return TextToSpeech.LANG_NOT_SUPPORTED
-            val n = voiceName.lowercase()
-            if (n.contains("en") || n.contains("koko") || n.contains("sky") || n.contains("nicole"))
-                TextToSpeech.LANG_COUNTRY_AVAILABLE
-            else TextToSpeech.LANG_NOT_SUPPORTED
+            if (TtsLogic.isKokoVoice(voiceName)) TextToSpeech.SUCCESS
+            else TextToSpeech.ERROR
         } catch (t: Throwable) {
             Log.w(TAG, "onIsValidVoiceName failed", t)
-            TextToSpeech.LANG_NOT_SUPPORTED
+            TextToSpeech.ERROR
         }
     }
 
     override fun onLoadVoice(voiceName: String?): Int {
         return try {
-            if (voiceName.isNullOrEmpty()) return TextToSpeech.LANG_NOT_SUPPORTED
+            if (!TtsLogic.isKokoVoice(voiceName)) return TextToSpeech.ERROR
             Log.i(TAG, "voice loaded: $voiceName")
-            TextToSpeech.LANG_COUNTRY_AVAILABLE
+            TextToSpeech.SUCCESS
         } catch (t: Throwable) {
             Log.w(TAG, "onLoadVoice failed", t)
-            TextToSpeech.LANG_NOT_SUPPORTED
+            TextToSpeech.ERROR
         }
     }
 
@@ -179,6 +195,7 @@ class KokoTtsService : TextToSpeechService() {
 
     override fun onStop() {
         stopped.set(true)
+        lastSynth = "${lastSynth.split("\n").firstOrNull() ?: "-"}\n[stopped]"
     }
 
     override fun onSynthesizeText(request: SynthesisRequest?, callback: SynthesisCallback?) {
@@ -194,6 +211,7 @@ class KokoTtsService : TextToSpeechService() {
         val variant0 = try { request.variant } catch (_: Exception) { "" }
         val voiceName0 = try { request.voiceName } catch (_: Exception) { "" }
         Log.i(TAG, "synth req lang=$lang0 country=$country0 variant=$variant0 voice=$voiceName0 rate=$snapRate chars=${text0.length} head=[${text0.take(60).replace('\n', ' ')}]")
+        recordSynth("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.UK).format(java.util.Date())} lang=$lang0/$country0 voice=$voiceName0 chars=${text0.length} head=[${text0.take(50).replace('\n', ' ')}]")
         synthExecutor.execute {
             try {
                 doSynthesize(text0, snapRate, callback)
