@@ -76,12 +76,19 @@ class KokoTtsService : TextToSpeechService() {
         }
     }
 
+    // v1.4 FIX (Play/Kindle silent regression): the framework matches
+    // languages by ISO-3 codes ("eng"/"USA", cf. Locale.getISO3Language).
+    // v1.3 switched this to ISO-2 ("en"/"US") so the framework concluded
+    // the engine supports nothing it asks for and never called
+    // onSynthesizeText. TEST VOICE bypasses the framework (direct
+    // AudioTrack), which is why it kept working. Voice locale (Locale.US
+    // -> eng/USA) and onIsLanguageAvailable already use ISO-3 semantics.
     override fun onGetLanguage(): Array<String> {
         return try {
-            arrayOf("en", "US", "")
+            arrayOf("eng", "USA", "")
         } catch (t: Throwable) {
             Log.w(TAG, "onGetLanguage failed", t)
-            arrayOf("en", "US", "")
+            arrayOf("eng", "USA", "")
         }
     }
 
