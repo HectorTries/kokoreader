@@ -7,3 +7,4 @@ local.properties
 *.onnx
 *.bin
 *.apk
+.kotlin/
