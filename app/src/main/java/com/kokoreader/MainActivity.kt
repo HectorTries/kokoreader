@@ -156,6 +156,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // v1.7: auto-refresh synthLog so done/error bytes are visible without
+    // a button press (framework callbacks don't touch the UI thread).
+    private var synthPoller: android.os.Handler? = null
+    override fun onResume() {
+        super.onResume()
+        try {
+            findViewById<android.widget.TextView>(R.id.synthLog)?.text = "last: ${KokoTtsService.lastSynth}"
+        } catch (_: Exception) {}
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        synthPoller = h
+        val r = object : Runnable {
+            var last = ""
+            override fun run() {
+                try {
+                    val cur = KokoTtsService.lastSynth
+                    if (cur != last) {
+                        last = cur
+                        findViewById<android.widget.TextView>(R.id.synthLog)?.text = "last: $cur"
+                    }
+                } catch (_: Exception) {}
+                try { h.postDelayed(this, 1000) } catch (_: Exception) {}
+            }
+        }
+        h.post(r)
+    }
+    override fun onPause() {
+        try { synthPoller?.removeCallbacksAndMessages(null) } catch (_: Exception) {}
+        synthPoller = null
+        super.onPause()
+    }
     private fun refreshEngineStatus() {
         try {
             val tv = findViewById<android.widget.TextView>(R.id.engineStatus)

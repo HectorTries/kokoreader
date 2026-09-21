@@ -38,7 +38,8 @@ class KokoTtsService : TextToSpeechService() {
         /** v0.6: host rate baseline — the engine already runs at 1.25x, so a
          *  host rate of 1.0 maps to no extra change; rates multiply. */
         private const val BASE_SPEED = 1.25f
-        /** v1.5 on-screen diagnostics: last framework synth event, readable
+        /** v1.5 on-screen diagnostics (v1.7: two-line — request line +
+         *  done/error line, so the audio result survives), readable
          *  from MainActivity without logcat (screenshot-able). */
         @Volatile var lastSynth: String = "no synth request yet"
             private set
@@ -47,6 +48,25 @@ class KokoTtsService : TextToSpeechService() {
         fun recordSynth(line: String) {
             synthCount++
             lastSynth = "#$synthCount $line"
+            try { onSynthChanged?.invoke() } catch (_: Exception) {}
+        }
+        /** v1.7: second line (done/error bytes) — appends, never clobbers
+         *  the request line above so both fit in one screenshot. */
+        fun appendSynth(line: String) {
+            lastSynth = "$lastSynth\n$line"
+            try { onSynthChanged?.invoke() } catch (_: Exception) {}
+        }
+        /** v1.7: MainActivity registers here for auto-refresh of the
+         *  synthLog TextView after request/done/error (runs on
+         *  binder/worker thread — observer must post to UI thread). */
+        @Volatile var onSynthChanged: (() -> Unit)? = null
+        fun recordSynthRequest(chars: Int) {
+            synthCount++
+            lastSynth = "#$synthCount request chars=$chars"
+        }
+        fun recordSynthDone(ok: Boolean, bytes: Int, started: Boolean, stoppedFlag: Boolean) {
+            lastSynth = "$lastSynth\n" + (if (ok) "done" else "error") + " bytes=$bytes started=$started stopped=$stoppedFlag"
+            try { onSynthChanged?.invoke() } catch (_: Exception) {}
         }
     }
 
@@ -252,9 +272,11 @@ class KokoTtsService : TextToSpeechService() {
         } catch (t: Throwable) {
             Log.e(TAG, "engine init failed during synthesis", t)
         }
+        // v1.7: request line already recorded at onSynthesizeText entry
+        // (line above survives — recordSynthDone only appends).
         if (!KokoroEngine.isReady()) {
             Log.w(TAG, "engine not ready (${KokoroEngine.status}); reporting error")
-            recordSynth("error init-failed chars=${clipped.length}")
+            recordSynthDone(false, 0, false, stopped.get())
             try { if (!hasFinished) { callback.error(); hasFinished = true } } catch (_: Exception) {}
             return
         }
@@ -304,19 +326,21 @@ class KokoTtsService : TextToSpeechService() {
                     while (off < bytes.size) {
                         if (stopped.get()) return@synthesizeChunked false
                         val n = minOf(8192, bytes.size - off)
-                        val written = callback.audioAvailable(bytes, off, n)
-                        // v0.9 BUG-4: a 0-write is backpressure, not progress —
-                        // re-offer the same slice (bounded), then fail loudly.
-                        if (written > 0) { off += written; continue }
+                        // v1.7 ROOT-CAUSE FIX (audit 2026-09-21): audioAvailable
+                        // returns a STATUS code (SUCCESS=0 / ERROR / STOPPED=-1),
+                        // NOT bytes-written. SUCCESS means the full slice was
+                        // consumed — advance by n, not by the return value.
+                        var ret = try { callback.audioAvailable(bytes, off, n) } catch (_: Exception) { TextToSpeech.ERROR }
+                        if (ret == TextToSpeech.SUCCESS) { off += n; continue }
+                        if (ret == TextToSpeech.STOPPED || stopped.get()) return@synthesizeChunked false
                         var retries = 0
-                        var w2 = 0
-                        while (retries < 10 && w2 <= 0 && !stopped.get()) {
+                        while (retries < 3 && ret != TextToSpeech.SUCCESS && !stopped.get()) {
                             try { Thread.sleep(5) } catch (_: InterruptedException) { break }
-                            w2 = try { callback.audioAvailable(bytes, off, n) } catch (_: Exception) { break }
+                            ret = try { callback.audioAvailable(bytes, off, n) } catch (_: Exception) { break }
                             retries++
                         }
-                        if (w2 > 0) { off += w2; continue }
-                        Log.e(TAG, "audioAvailable 0-write x$retries — reporting error")
+                        if (ret == TextToSpeech.SUCCESS) { off += n; continue }
+                        Log.e(TAG, "audioAvailable status=$ret x$retries — reporting error")
                         return@synthesizeChunked false
                     }
                     true
@@ -347,8 +371,8 @@ class KokoTtsService : TextToSpeechService() {
         } catch (t: Throwable) {
             Log.w(TAG, "completion callback failed", t)
         }
-        // v1.6 diagnostics: distinguish request vs audio actually delivered.
-        recordSynth("done bytes=$bytesDelivered ok=$ok started=$hasStarted stopped=${stopped.get()} chars=${clipped.length}")
+        // v1.7 diagnostics: two-line (request already recorded at entry).
+        recordSynthDone(ok, bytesDelivered, hasStarted, stopped.get())
         Log.i(TAG, "utterance ${if (ok) "done" else "ended early"} (${clipped.length} chars, bytes=$bytesDelivered)")
     }
 

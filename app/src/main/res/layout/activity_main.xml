@@ -158,7 +158,7 @@
         android:paddingTop="4dp" />
 
     <TextView
-        android:text="Framework requests (v1.5 — screenshot this if Play/Kindle is silent)"
+        android:text="Framework requests (v1.7 — screenshot this if Play/Kindle is silent)"
         android:textStyle="bold"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

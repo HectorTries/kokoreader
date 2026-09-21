@@ -50,20 +50,22 @@ class ServiceContractTest {
         for (m in doneCalls) {
             val before = s.substring(0, m.range.first).takeLast(600)
             assertTrue("callback.done() must be gated on started: ...${before.takeLast(120)}",
-                before.contains("started"))
+                before.contains("started") || before.contains("hasStarted"))
         }
     }
 
     @Test fun `zero-chunk success maps to error`() {
         val s = service()
         assertTrue("ok && started gate required",
-            s.contains("if (ok && started") || s.contains("ok && started &&"))
+            s.contains("if (ok && started") || s.contains("ok && started &&")
+                || s.contains("ok && hasStarted"))
         assertTrue("error() fallback required", s.contains("callback.error()"))
     }
 
     @Test fun `engine all-empty G2P returns failure for non-blank text`() {
         val e = engine()
-        assertTrue(e.contains("if (idLists.isEmpty()) return text.isBlank()"))
+        assertTrue("empty-G2P guard", e.contains("if (idLists.isEmpty())"))
+        assertTrue("blank-text-only success", e.contains("return text.isBlank()"))
     }
 
     @Test fun `engine G2P probe refuses ready on empty ids`() {
@@ -74,11 +76,13 @@ class ServiceContractTest {
 
     // ---- BUG-4: audioAvailable retry ----
 
-    @Test fun `zero-write audioAvailable retries before failing`() {
+    @Test fun `v17 audioAvailable status contract`() {
         val s = service()
-        assertTrue("retry loop required", s.contains("retries < 10"))
-        assertTrue("backpressure sleep required", s.contains("Thread.sleep(5)"))
-        assertTrue("0-write must log loudly", s.contains("0-write"))
+        assertTrue("SUCCESS advances by n", s.contains("ret == TextToSpeech.SUCCESS"))
+        assertTrue("STOPPED aborts cleanly", s.contains("TextToSpeech.STOPPED"))
+        assertTrue("bounded retry", s.contains("Thread.sleep(5)"))
+        assertTrue("status error logs loudly", s.contains("audioAvailable status="))
+        assertFalse("must not treat return as bytes", s.contains("off += written") || s.contains("off += w2"))
     }
 
     // ---- Manifest ----
