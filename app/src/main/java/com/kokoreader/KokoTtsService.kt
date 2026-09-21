@@ -32,6 +32,9 @@ class KokoTtsService : TextToSpeechService() {
     companion object {
         private const val TAG = "KokoTtsService"
         private const val MAX_SPEECH_INPUT = 4000
+        /** v1.6: per-pass utterance cap (~1000 chars, word-boundary cut),
+         *  sequential passes share one start/done session. */
+        private const val MAX_UTTERANCE_CHARS = 1000
         /** v0.6: host rate baseline — the engine already runs at 1.25x, so a
          *  host rate of 1.0 maps to no extra change; rates multiply. */
         private const val BASE_SPEED = 1.25f
@@ -239,18 +242,11 @@ class KokoTtsService : TextToSpeechService() {
         }
         val clipped = if (text.length > MAX_SPEECH_INPUT) text.take(MAX_SPEECH_INPUT) else text
 
-        // v1.1 FIX-3 (first-run timeout): start the audio stream IMMEDIATELY
-        // on the worker, BEFORE the 134MB stage + ORT session build, so the
-        // host never times out waiting for the first byte. Gapless: the
-        // first yielded chunk follows the same stream.
-        var started = false
-        try {
-            callback.start(KokoroEngine.SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
-            started = true
-        } catch (t: Throwable) {
-            Log.w(TAG, "early callback.start failed", t)
-        }
-        // Ensure model is staged/loaded (worker thread — safe for file IO + ORT).
+        // v1.6: ensureInit + isReady BEFORE the first callback.start(). If
+        // init fails, report error() with no start — a start with no audio
+        // leaves hosts waiting on a stream that never delivers.
+        var hasStarted = false
+        var hasFinished = false
         try {
             KokoroEngine.ensureInit(applicationContext)
         } catch (t: Throwable) {
@@ -258,7 +254,8 @@ class KokoTtsService : TextToSpeechService() {
         }
         if (!KokoroEngine.isReady()) {
             Log.w(TAG, "engine not ready (${KokoroEngine.status}); reporting error")
-            try { callback.error() } catch (_: Exception) {}
+            recordSynth("error init-failed chars=${clipped.length}")
+            try { if (!hasFinished) { callback.error(); hasFinished = true } } catch (_: Exception) {}
             return
         }
         // v0.6: honour host speech-rate (Kindle/Play Books speed slider).
@@ -274,16 +271,35 @@ class KokoTtsService : TextToSpeechService() {
             Log.w(TAG, "speech-rate mapping failed", t)
         }
 
-        val ok = KokoroEngine.synthesizeChunked(
-            clipped,
+        // v1.6: cap each synthesize pass at ~1000 chars (boundary-aligned),
+        // processed sequentially in ONE start/done session. Long hosts
+        // utterances no longer risk G2P/ORT stalls mid-stream.
+        val segments = ArrayList<String>()
+        var rem = clipped
+        while (rem.length > MAX_UTTERANCE_CHARS) {
+            var cut = rem.lastIndexOf(' ', MAX_UTTERANCE_CHARS)
+            if (cut < MAX_UTTERANCE_CHARS / 2) cut = MAX_UTTERANCE_CHARS
+            segments.add(rem.substring(0, cut))
+            rem = rem.substring(cut).trimStart()
+        }
+        if (rem.isNotEmpty()) segments.add(rem)
+
+        var bytesDelivered = 0
+        var ok = true
+        for (seg in segments) {
+            if (stopped.get()) { ok = false; break }
+            ok = KokoroEngine.synthesizeChunked(
+                seg,
             shouldStop = { stopped.get() },
             yield = { pcm ->
                 try {
-                    if (!started) {
+                    // v1.6: late start on first audio, guarded — start at most once.
+                    if (!hasStarted && !hasFinished) {
                         callback.start(KokoroEngine.SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
-                        started = true
+                        hasStarted = true
                     }
                     val bytes = KokoroEngine.floatToPcm16(pcm)
+                    bytesDelivered += bytes.size
                     var off = 0
                     while (off < bytes.size) {
                         if (stopped.get()) return@synthesizeChunked false
@@ -309,17 +325,31 @@ class KokoTtsService : TextToSpeechService() {
                     false
                 }
             }
-        )
+            )
+            if (!ok) break
+        }
         try {
             // v0.9: nothing started = failure, never done(). Silent
             // empty-audio "success" leaves hosts (Kindle) stuck on mute.
-            if (ok && started && !stopped.get()) callback.done()
-            else if (!stopped.get()) callback.error()
-            // else: stopped mid-utterance — just return, framework handles it.
+            // v1.6: never leave the callback dangling — if stopped after
+            // start, done()/error (guarded by hasFinished).
+            if (hasFinished) { /* already terminated */ }
+            else if (ok && hasStarted && !stopped.get()) { callback.done(); hasFinished = true }
+            else if (stopped.get()) {
+                // Stopped mid-utterance after start: terminate gracefully
+                // with done() (SynthesisCallback has no stop()); fall back
+                // to error() if done() throws. No start yet: error().
+                if (hasStarted) { try { callback.done() } catch (_: Exception) { try { callback.error() } catch (_: Exception) {} } }
+                else { try { callback.error() } catch (_: Exception) {} }
+                hasFinished = true
+            }
+            else { try { callback.error() } catch (_: Exception) {}; hasFinished = true }
         } catch (t: Throwable) {
             Log.w(TAG, "completion callback failed", t)
         }
-        Log.i(TAG, "utterance ${if (ok) "done" else "ended early"} (${clipped.length} chars)")
+        // v1.6 diagnostics: distinguish request vs audio actually delivered.
+        recordSynth("done bytes=$bytesDelivered ok=$ok started=$hasStarted stopped=${stopped.get()} chars=${clipped.length}")
+        Log.i(TAG, "utterance ${if (ok) "done" else "ended early"} (${clipped.length} chars, bytes=$bytesDelivered)")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {

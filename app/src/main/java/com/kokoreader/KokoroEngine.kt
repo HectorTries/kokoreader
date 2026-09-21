@@ -360,13 +360,15 @@ object KokoroEngine {
             // infer chunk N+1 on a worker while chunk N's PCM is yielded
             // (playback blocks in yield). Gapless: no gaps inserted anywhere.
             val idLists = ArrayList<LongArray>()
+            var failedChunks = 0
             for (chunk in splitSentences(text)) {
                 if (shouldStop()) break
                 val ids = try {
                     EspeakBridge.textToPhonemeIds(chunk)
                 } catch (t: Throwable) {
-                    Log.e(TAG, "G2P failed on chunk", t)
-                    return false
+                    Log.w(TAG, "G2P failed on chunk, skipping", t)
+                    failedChunks++
+                    continue
                 }
                 if (ids.isEmpty()) continue
                 // Token cap ~400 phonemes: split fallback by halving.
@@ -385,7 +387,12 @@ object KokoroEngine {
             }
             // v0.9: all-empty G2P on non-blank text is a failure, not
             // success — return false so fallbacks / error callbacks trigger.
-            if (idLists.isEmpty()) return text.isBlank()
+            // v1.6: skipped (G2P-failed) chunks don't fail the utterance;
+            // only zero yielded audio is a failure.
+            if (idLists.isEmpty()) {
+                Log.w(TAG, "no chunks yielded audio (failedChunks=$failedChunks, blank=${text.isBlank()})")
+                return text.isBlank()
+            }
             val inferPool = java.util.concurrent.Executors.newSingleThreadExecutor()
             try {
                 var ok = true
